@@ -6,7 +6,6 @@ from PyPDF2 import PdfReader
 
 
 def load_pdfs_to_documents(pdf_source: Union[str, Sequence[str]]) -> List[Document]:
-    """Load PDFs from a directory path or a list of file paths."""
     documents: List[Document] = []
 
     pdf_paths: List[Path] = []
