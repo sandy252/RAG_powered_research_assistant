@@ -1,49 +1,53 @@
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_openai import ChatOpenAI
+from pathlib import Path
+from typing import List, Sequence, Union
+import warnings
 from langchain_core.documents import Document
-from dotenv import load_dotenv
-import re
-
-load_dotenv()
+from PyPDF2 import PdfReader
 
 
-def cleaner(page_contents):
-    text = page_contents
+def load_pdfs_to_documents(pdf_source: Union[str, Sequence[str]]) -> List[Document]:
+    """Load PDFs from a directory path or a list of file paths."""
+    documents: List[Document] = []
 
-    text = re.split(r'\b(references|bibliography)\b', text, flags=re.IGNORECASE)[0]
-    text = re.sub(r'\S+@\S+', ' ', text)
-    text = re.sub(r'\[[0-9,\s]+\]', ' ', text)
-    text = re.sub(r'\([A-Za-z].*?\d{4}.*?\)', ' ', text)
-    text = re.sub(r'(Figure|Fig\.|Table)\s*\d+.*', ' ', text, flags=re.IGNORECASE)
-    text = re.sub(r'Page\s*\d+', ' ', text, flags=re.IGNORECASE)
-    text = re.sub(r'\n\d+\n', ' ', text)
-    text = re.sub(r'[\x00-\x1F\x7F-\x9F]', ' ', text)
-    text = text.replace('\n', ' ').replace('\t', ' ')
-    text = " ".join(text.split())
+    pdf_paths: List[Path] = []
+    if isinstance(pdf_source, str):
+        source_path = Path(pdf_source)
+        if source_path.is_dir():
+            pdf_paths = sorted(source_path.glob("*.pdf"))
+        else:
+            pdf_paths = [source_path]
+    else:
+        pdf_paths = [Path(path) for path in pdf_source]
 
-    return text
-    
+    for pdf_path in pdf_paths:
+        if not pdf_path.exists():
+            warnings.warn(f"Skipping missing file: {pdf_path}")
+            continue
 
-def load_paper(file):
-    loader = PyPDFLoader(file)
-    docs = loader.load()
-    cleaned_documents = list()
+        if not pdf_path.is_file() or pdf_path.suffix.lower() != ".pdf":
+            warnings.warn(f"Skipping non-PDF path: {pdf_path}")
+            continue
 
-    for doc in docs:
-        raw_content = doc.page_content
-        cleaned_content = cleaner(raw_content)
-        new_document = Document(
-            page_content = cleaned_content,
-            metadata = doc.metadata
-        )
-        cleaned_documents.append(new_document)
-        
+        try:
+            reader = PdfReader(str(pdf_path))
+        except Exception as exc:
+            warnings.warn(f"Skipping unreadable PDF {pdf_path}: {exc}")
+            continue
 
-    return cleaned_documents
+        for page_index, page in enumerate(reader.pages, start=1):
+            text = (page.extract_text() or "").strip()
+            if not text:
+                continue
 
-docs = load_paper(r"D:\RAG_assistant\attention_paper.pdf")
-print(docs[4].page_content)
+            documents.append(
+                Document(
+                    page_content=text,
+                    metadata={
+                        "page_number": page_index,
+                        "source": pdf_path.name,
+                        "file_path": str(pdf_path),
+                    },
+                )
+            )
 
-"""
-checking whether my git is connected to the right repository or not, and also checking whether the code is being pushed to the repository or not.
-"""
+    return documents
