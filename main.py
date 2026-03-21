@@ -11,7 +11,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.append(str(SRC_DIR))
 
-from src.loader import load_pdfs_to_documents
+from src.loader import load_documents
 from src.splitter import split_documents
 from src.indexing import build_index_from_chunks, count_indexed_documents
 from src.generator import RAGGenerator
@@ -34,13 +34,21 @@ with st.sidebar:
     reset_index = st.checkbox("Reset index before indexing", value=True)
 
 uploaded_files = st.file_uploader(
-    "Upload one or more PDF files",
-    type=["pdf"],
+    "Upload one or more PDF/DOCX files",
+    type=["pdf", "docx"],
     accept_multiple_files=True,
 )
 
-if st.button("Build / Update Index", type="primary", disabled=not uploaded_files):
-    with st.spinner("Processing PDFs and building vector index..."):
+url_input = st.text_area(
+    "Or add paper URLs (one per line)",
+    placeholder="https://arxiv.org/pdf/1706.03762.pdf\nhttps://example.com/paper-page",
+)
+
+urls = [line.strip() for line in url_input.splitlines() if line.strip()]
+has_sources = bool(uploaded_files) or bool(urls)
+
+if st.button("Build / Update Index", type="primary", disabled=not has_sources):
+    with st.spinner("Processing files/URLs and building vector index..."):
         temp_dir = Path(tempfile.mkdtemp(prefix="rag_uploads_"))
         saved_paths = []
 
@@ -50,7 +58,11 @@ if st.button("Build / Update Index", type="primary", disabled=not uploaded_files
                 save_path.write_bytes(uploaded.getbuffer())
                 saved_paths.append(str(save_path))
 
-            documents = load_pdfs_to_documents(saved_paths)
+            source_items = [*saved_paths, *urls]
+            documents = load_documents(source_items)
+            if not documents:
+                raise ValueError("No readable content found in provided files/URLs.")
+
             chunks = split_documents(
                 documents,
                 chunk_size=int(chunk_size),
