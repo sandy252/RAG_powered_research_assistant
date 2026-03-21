@@ -3,4 +3,4 @@ venv
 attention_paper.pdf
 cleaned_corpus.txt
 corpus.txt
-requirements.txt
+vector_db
