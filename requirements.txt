@@ -6,3 +6,6 @@ PyPDF2
 chromadb
 streamlit
 langchain-text-splitters
+python-docx
+requests
+beautifulsoup4
