@@ -25,6 +25,8 @@ if "collection_name" not in st.session_state:
     st.session_state.collection_name = "rag_chunks_ui"
 if "indexed" not in st.session_state:
     st.session_state.indexed = False
+if "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = []
 
 with st.sidebar:
     st.header("Settings")
@@ -32,6 +34,9 @@ with st.sidebar:
     chunk_overlap = st.number_input("Chunk overlap", min_value=0, max_value=500, value=150, step=10)
     retrieval_k = st.number_input("Top K", min_value=1, max_value=20, value=5, step=1)
     reset_index = st.checkbox("Reset index before indexing", value=True)
+    if st.button("Clear Chat"):
+        st.session_state.chat_messages = []
+        st.success("Chat history cleared.")
 
 uploaded_files = st.file_uploader(
     "Upload one or more PDF/DOCX files",
@@ -83,6 +88,7 @@ if st.button("Build / Update Index", type="primary", disabled=not has_sources):
             )
 
             st.session_state.indexed = True
+            st.session_state.chat_messages = []
             st.success(
                 f"Index ready. Loaded pages: {len(documents)} | Chunks: {len(chunks)} | "
                 f"Vectors in collection: {total_indexed}"
@@ -95,39 +101,68 @@ if st.button("Build / Update Index", type="primary", disabled=not has_sources):
 
 st.divider()
 
-question = st.text_input("Ask a question about your uploaded papers")
+st.subheader("Chat with Your Papers")
 
-if st.button("Get Answer", disabled=not st.session_state.indexed):
-    if not question.strip():
-        st.warning("Please enter a question.")
-    else:
-        with st.spinner("Retrieving and generating answer..."):
-            try:
-                generator = RAGGenerator(
-                    persist_directory="vector_db",
-                    collection_name=st.session_state.collection_name,
-                    retrieval_k=int(retrieval_k),
-                )
-                result = generator.answer_query(question)
+for idx, msg in enumerate(st.session_state.chat_messages):
+    with st.chat_message(msg.get("role", "assistant")):
+        st.write(msg.get("content", ""))
 
-                st.subheader("Answer")
-                st.write(result.get("answer", "No answer generated."))
+        if msg.get("role") == "assistant":
+            citations = msg.get("citations", [])
+            if citations:
+                st.caption("Citations")
+                for item in citations:
+                    source = item.get("source") or "unknown_source"
+                    page = item.get("page_number") or "unknown_page"
+                    st.write(f"- {source} (page {page})")
 
-                citations = result.get("citations", [])
-                st.subheader("Citations")
-                if citations:
-                    for item in citations:
-                        source = item.get("source") or "unknown_source"
-                        page = item.get("page_number") or "unknown_page"
-                        st.write(f"- {source} (page {page})")
-                else:
-                    st.write("No citations available.")
+            used_chunks = msg.get("used_chunks", [])
+            if used_chunks:
+                with st.expander(f"Retrieved Chunks (Debug) - Turn {idx + 1}"):
+                    standalone_query = msg.get("standalone_query")
+                    if standalone_query:
+                        st.write(f"Standalone retrieval query: {standalone_query}")
+                        st.divider()
 
-                with st.expander("Retrieved Chunks (Debug)"):
-                    for i, chunk in enumerate(result.get("used_chunks", []), start=1):
+                    for i, chunk in enumerate(used_chunks, start=1):
                         st.markdown(f"**Chunk {i}**")
                         st.write(f"Source: {chunk.get('source')} | Page: {chunk.get('page_number')}")
                         st.write((chunk.get("content") or "")[:800])
                         st.divider()
-            except Exception as exc:
-                st.error(f"Generation failed: {exc}")
+
+if not st.session_state.indexed:
+    st.info("Build the index first, then start chatting with your papers.")
+
+user_prompt = st.chat_input(
+    "Ask a question about your indexed papers",
+    disabled=not st.session_state.indexed,
+)
+
+if user_prompt is not None and user_prompt.strip():
+    st.session_state.chat_messages.append({"role": "user", "content": user_prompt.strip()})
+
+    with st.spinner("Retrieving and generating answer..."):
+        try:
+            generator = RAGGenerator(
+                persist_directory="vector_db",
+                collection_name=st.session_state.collection_name,
+                retrieval_k=int(retrieval_k),
+            )
+            history = [
+                {"role": m.get("role", "user"), "content": m.get("content", "")}
+                for m in st.session_state.chat_messages[:-1]
+            ]
+            result = generator.answer_chat(question=user_prompt, history=history, history_window=8)
+
+            st.session_state.chat_messages.append(
+                {
+                    "role": "assistant",
+                    "content": result.get("answer", "No answer generated."),
+                    "citations": result.get("citations", []),
+                    "used_chunks": result.get("used_chunks", []),
+                    "standalone_query": result.get("standalone_query", ""),
+                }
+            )
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Generation failed: {exc}")

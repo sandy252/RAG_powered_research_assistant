@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Sequence
 
 from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate
@@ -30,7 +30,7 @@ class RAGGenerator:
             k=retrieval_k,
         )
         self.llm = ChatOpenAI(model=llm_model, temperature=temperature)
-        self.prompt = ChatPromptTemplate.from_messages(
+        self.answer_prompt = ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
@@ -39,9 +39,25 @@ class RAGGenerator:
                 ),
                 (
                     "human",
+                    "Conversation history:\n{history}\n\n"
                     "Question:\n{question}\n\n"
                     "Context:\n{context}\n\n"
                     "Return a concise answer grounded in the context.",
+                ),
+            ]
+        )
+        self.rewrite_prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "Rewrite the user's latest message into a standalone retrieval query for research papers. "
+                    "Use the conversation history only to resolve references (for example: it, this method, that paper). "
+                    "Return only the rewritten query text.",
+                ),
+                (
+                    "human",
+                    "Conversation history:\n{history}\n\n"
+                    "Latest user message:\n{question}",
                 ),
             ]
         )
@@ -72,33 +88,84 @@ class RAGGenerator:
 
         return citations
 
-    def answer_query(self, question: str) -> Dict[str, object]:
-        """Retrieve context and generate an answer with citations."""
+    @staticmethod
+    def _format_history(history: Sequence[Dict[str, str]]) -> str:
+        if not history:
+            return "(none)"
+
+        lines: List[str] = []
+        for turn in history:
+            role = (turn.get("role") or "user").strip().lower()
+            content = (turn.get("content") or "").strip()
+            if not content:
+                continue
+            speaker = "User" if role == "user" else "Assistant"
+            lines.append(f"{speaker}: {content}")
+
+        return "\n".join(lines) if lines else "(none)"
+
+    def _rewrite_query(self, question: str, history: Sequence[Dict[str, str]]) -> str:
+        if not history:
+            return question
+
+        messages = self.rewrite_prompt.format_messages(
+            question=question,
+            history=self._format_history(history),
+        )
+        response = self.llm.invoke(messages)
+        rewritten = str(response.content or "").strip()
+        return rewritten or question
+
+    def answer_chat(
+        self,
+        question: str,
+        history: Optional[Sequence[Dict[str, str]]] = None,
+        history_window: int = 8,
+    ) -> Dict[str, object]:
+        """Answer a user question using recent conversation context plus retrieved chunks."""
         question = question.strip()
         if not question:
             return {
                 "answer": "Please provide a non-empty question.",
                 "citations": [],
                 "used_chunks": [],
+                "standalone_query": "",
             }
 
-        retrieved_chunks = self.retriever.retrieve_with_citations(question)
+        chat_history = list(history or [])
+        if history_window > 0:
+            recent_history = chat_history[-history_window:]
+        else:
+            recent_history = chat_history
+
+        standalone_query = self._rewrite_query(question=question, history=recent_history)
+        retrieved_chunks = self.retriever.retrieve_with_citations(standalone_query)
         if not retrieved_chunks:
             return {
                 "answer": "I could not find enough evidence in the indexed documents.",
                 "citations": [],
                 "used_chunks": [],
+                "standalone_query": standalone_query,
             }
 
         context = self._format_context(retrieved_chunks)
-        messages = self.prompt.format_messages(question=question, context=context)
+        messages = self.answer_prompt.format_messages(
+            question=question,
+            history=self._format_history(recent_history),
+            context=context,
+        )
         response = self.llm.invoke(messages)
 
         return {
             "answer": response.content,
             "citations": self._build_citations(retrieved_chunks),
             "used_chunks": retrieved_chunks,
+            "standalone_query": standalone_query,
         }
+
+    def answer_query(self, question: str) -> Dict[str, object]:
+        """Backward-compatible single-turn entry point."""
+        return self.answer_chat(question=question, history=[])
 
 
 def ask_question(
