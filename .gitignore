@@ -4,3 +4,5 @@ attention_paper.pdf
 cleaned_corpus.txt
 corpus.txt
 vector_db
+src/__pycache__/
+vector_db/
