@@ -27,6 +27,8 @@ if "indexed" not in st.session_state:
     st.session_state.indexed = False
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
+if "citation_visibility" not in st.session_state:
+    st.session_state.citation_visibility = {}
 
 with st.sidebar:
     st.header("Settings")
@@ -36,6 +38,7 @@ with st.sidebar:
     reset_index = st.checkbox("Reset index before indexing", value=True)
     if st.button("Clear Chat"):
         st.session_state.chat_messages = []
+        st.session_state.citation_visibility = {}
         st.success("Chat history cleared.")
 
 uploaded_files = st.file_uploader(
@@ -89,6 +92,7 @@ if st.button("Build / Update Index", type="primary", disabled=not has_sources):
 
             st.session_state.indexed = True
             st.session_state.chat_messages = []
+            st.session_state.citation_visibility = {}
             st.success(
                 f"Index ready. Loaded pages: {len(documents)} | Chunks: {len(chunks)} | "
                 f"Vectors in collection: {total_indexed}"
@@ -110,11 +114,18 @@ for idx, msg in enumerate(st.session_state.chat_messages):
         if msg.get("role") == "assistant":
             citations = msg.get("citations", [])
             if citations:
-                st.caption("Citations")
-                for item in citations:
-                    source = item.get("source") or "unknown_source"
-                    page = item.get("page_number") or "unknown_page"
-                    st.write(f"- {source} (page {page})")
+                is_visible = st.session_state.citation_visibility.get(idx, False)
+                button_label = "Hide citations" if is_visible else "Show citations"
+                if st.button(button_label, key=f"toggle_citations_{idx}"):
+                    st.session_state.citation_visibility[idx] = not is_visible
+                    is_visible = st.session_state.citation_visibility[idx]
+
+                if is_visible:
+                    st.caption("Citations")
+                    for item in citations:
+                        source = item.get("source") or "unknown_source"
+                        page = item.get("page_number") or "unknown_page"
+                        st.write(f"- {source} (page {page})")
 
             used_chunks = msg.get("used_chunks", [])
             if used_chunks:
